@@ -28,6 +28,7 @@ cd hh-suite/build
 cmake -DCMAKE_INSTALL_PREFIX=/opt/hhsuite ..
 make -j16
 make install
+for i in $(ls /opt/hhsuite/bin); do ln -s /opt/hhsuite/bin/$i /usr/bin/$i; done;
 cd /build
 
 #conda
