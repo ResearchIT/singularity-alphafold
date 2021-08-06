@@ -1,24 +1,36 @@
 Bootstrap: docker
-From: nvidia/cuda:11.1-base
+From: containers.las.iastate.edu/centos8-cuda11.0-cudnn8-tensorrt7-python38-tensorflow
 
 %environment
-export PATH=$PATH:/opt/hhsuite/bin:/opt/conda/bin:/usr/local/cuda/bin
+export PATH=$PATH:/opt/hhsuite/bin:/opt/hmmer/bin:/opt/kalign/bin:/opt/openmm/bin:/usr/local/cuda/bin
 export LD_LIBRARY_PATH=/usr/local/cuda/lib64
 
 %post -c /bin/bash
-export CUDA_VERSION=11.1
-export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true
-export OS=ubuntu2004
-apt-get update -y
-apt-get install -y curl software-properties-common
-curl -L https://developer.download.nvidia.com/compute/cuda/repos/${OS}/x86_64/cuda-${OS}.pin -o /etc/apt/preferences.d/cuda-repository-pin-600
-apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/${OS}/x86_64/7fa2af80.pub
-add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/${OS}/x86_64/ /"
-apt-get update -y
-apt-get install -y build-essential cmake libcudnn8 libcusolver-${CUDA_VERSION/./-} cuda-command-line-tools-${CUDA_VERSION/./-} git hmmer kalign tzdata
-rm -rf /var/lib/apt/lists/*
+set -e
+dnf install -y git cmake patch automake autoconf opencl-headers gcc-gfortran fftw-devel swig doxygen
 
 mkdir /build
+
+# build hmmer
+cd /build
+curl -LO http://eddylab.org/software/hmmer/hmmer-3.3.2.tar.gz
+tar -xzf hmmer-3.3.2.tar.gz
+cd hmmer-3.3.2
+./configure --prefix=/opt/hmmer
+make -j16
+make install
+for i in $(ls /opt/hmmer/bin); do ln -s /opt/hmmer/bin/$i /usr/bin/$i; done;
+
+# build kalign
+cd /build
+curl -LO https://github.com/TimoLassmann/kalign/archive/refs/tags/v3.3.1.tar.gz
+tar -xzf v3.3.1.tar.gz
+cd kalign-3.3.1
+./autogen.sh
+./configure --prefix=/opt/kalign
+make -j16
+make install
+for i in $(ls /opt/kalign/bin); do ln -s /opt/kalign/bin/$i /usr/bin/$i; done;
 
 #build hhsuite
 cd /build
@@ -31,25 +43,43 @@ make install
 for i in $(ls /opt/hhsuite/bin); do ln -s /opt/hhsuite/bin/$i /usr/bin/$i; done;
 cd /build
 
-#conda
-curl -L https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o miniconda-install.sh
-bash miniconda-install.sh -b -p /opt/conda
-export PATH=$PATH:/opt/conda/bin
-conda update -qy conda
-conda install -y -c conda-forge openmm=7.5.1 cudatoolkit==${CUDA_VERSION}.1 pdbfixer pip
+# build openmm
+python3 -m pip install --upgrade cython
+curl -LO https://github.com/openmm/openmm/archive/refs/tags/7.5.1.tar.gz
+tar -xzf 7.5.1.tar.gz
+cd openmm-7.5.1
+mkdir build
+cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=/opt/openmm -DCMAKE_LIBRARY_PATH=/usr/local/cuda/lib64/stubs
+make -j16
+make install
+make PythonInstall
+for i in $(ls /opt/openmm/bin); do ln -s /opt/openmm/bin/$i /usr/bin/$i; done;
+
+# pdbfixer
+curl -LO https://github.com/openmm/pdbfixer/archive/refs/tags/v1.7.tar.gz
+tar -xzf v1.7.tar.gz
+cd pdbfixer-1.7
+python3 -m pip install .
+
 
 #alphafold proper
-mkdir /app
-git clone https://github.com/deepmind/alphafold.git /app/alphafold
-curl -L https://git.scicore.unibas.ch/schwede/openstructure/-/raw/7102c63615b64735c4941278d92b554ec94415f8/modules/mol/alg/src/stereo_chemical_props.txt -o /app/alphafold/alphafold/common/stereo_chemical_props.txt
+git clone https://github.com/deepmind/alphafold.git /opt/alphafold
+cd /opt/alphafold
+curl -vL https://git.scicore.unibas.ch/schwede/openstructure/-/raw/7102c63615b64735c4941278d92b554ec94415f8/modules/mol/alg/src/stereo_chemical_props.txt -o alphafold/common/stereo_chemical_props.txt
 
-pip3 install --upgrade pip
-pip3 install -r /app/alphafold/requirements.txt
-pip3 install --upgrade jax jaxlib==0.1.69+cuda${CUDA_VERSION/./} -f https://storage.googleapis.com/jax-releases/jax_releases.html
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements.txt
+python3 -m pip install --upgrade jax jaxlib==0.1.69+cuda110 -f https://storage.googleapis.com/jax-releases/jax_releases.html
 
 #patch openMM
-cd /opt/conda/lib/python3.9/site-packages
-patch -p0 < /app/alphafold/docker/openmm.patch
+cd /opt/python38/lib/python3.8/site-packages/
+patch -p0 < /opt/alphafold/docker/openmm.patch
 
-ldconfig
+chmod -R o+rX /opt
+
 rm -rf /build
+dnf remove -y git cmake automake autoconfig autotools
+dnf clean all
+rm -rf /var/cache/dnf/*
+set +e
