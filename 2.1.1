@@ -1,0 +1,85 @@
+Bootstrap: docker
+From: containers.las.iastate.edu/centos8-cuda11.0-cudnn8-tensorrt7-python38-tensorflow
+
+%environment
+export PATH=$PATH:/opt/hhsuite/bin:/opt/hmmer/bin:/opt/kalign/bin:/opt/openmm/bin:/usr/local/cuda/bin
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64
+
+%post -c /bin/bash
+set -e
+dnf install -y git cmake patch automake autoconf opencl-headers gcc-gfortran fftw-devel swig doxygen
+
+mkdir /build
+
+# build hmmer
+cd /build
+curl -LO http://eddylab.org/software/hmmer/hmmer-3.3.2.tar.gz
+tar -xzf hmmer-3.3.2.tar.gz
+cd hmmer-3.3.2
+./configure --prefix=/opt/hmmer
+make -j16
+make install
+for i in $(ls /opt/hmmer/bin); do ln -s /opt/hmmer/bin/$i /usr/bin/$i; done;
+
+# build kalign
+cd /build
+curl -LO https://github.com/TimoLassmann/kalign/archive/refs/tags/v3.3.1.tar.gz
+tar -xzf v3.3.1.tar.gz
+cd kalign-3.3.1
+./autogen.sh
+./configure --prefix=/opt/kalign
+make -j16
+make install
+for i in $(ls /opt/kalign/bin); do ln -s /opt/kalign/bin/$i /usr/bin/$i; done;
+
+#build hhsuite
+cd /build
+git clone --branch v3.3.0 https://github.com/soedinglab/hh-suite.git
+mkdir hh-suite/build
+cd hh-suite/build
+cmake -DCMAKE_INSTALL_PREFIX=/opt/hhsuite ..
+make -j16
+make install
+for i in $(ls /opt/hhsuite/bin); do ln -s /opt/hhsuite/bin/$i /usr/bin/$i; done;
+cd /build
+
+# build openmm
+python3 -m pip install --upgrade cython
+curl -LO https://github.com/openmm/openmm/archive/refs/tags/7.5.1.tar.gz
+tar -xzf 7.5.1.tar.gz
+cd openmm-7.5.1
+mkdir build
+cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=/opt/openmm -DCMAKE_LIBRARY_PATH=/usr/local/cuda/lib64/stubs
+make -j16
+make install
+make PythonInstall
+for i in $(ls /opt/openmm/bin); do ln -s /opt/openmm/bin/$i /usr/bin/$i; done;
+
+# pdbfixer
+curl -LO https://github.com/openmm/pdbfixer/archive/refs/tags/v1.7.tar.gz
+tar -xzf v1.7.tar.gz
+cd pdbfixer-1.7
+python3 -m pip install .
+
+
+#alphafold proper
+git clone -b v2.1.1 https://github.com/deepmind/alphafold.git /opt/alphafold
+cd /opt/alphafold
+curl -vL https://git.scicore.unibas.ch/schwede/openstructure/-/raw/7102c63615b64735c4941278d92b554ec94415f8/modules/mol/alg/src/stereo_chemical_props.txt -o alphafold/common/stereo_chemical_props.txt
+
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements.txt
+python3 -m pip install --upgrade jax jaxlib==0.1.69+cuda110 -f https://storage.googleapis.com/jax-releases/jax_releases.html
+
+#patch openMM
+cd /opt/python38/lib/python3.8/site-packages/
+patch -p0 < /opt/alphafold/docker/openmm.patch
+
+chmod -R o+rX /opt
+
+rm -rf /build
+dnf remove -y git cmake automake autoconfig autotools
+dnf clean all
+rm -rf /var/cache/dnf/*
+set +e
